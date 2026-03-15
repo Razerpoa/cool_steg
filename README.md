@@ -10,4 +10,4 @@ The cool steganography tool i've made. This can hide any file and any message to
 `uv run main.py`
 
 # License
-[GPL v3](License)
+[GPL v3](LICENSE)
