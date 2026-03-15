@@ -8,3 +8,6 @@ The cool steganography tool i've made. This can hide any file and any message to
 3. uv sync
 ## how to use
 `uv run main.py`
+
+# License
+[GPL v3](License)
