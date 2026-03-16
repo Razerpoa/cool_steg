@@ -24,13 +24,14 @@ def hide(
     cover: Path = typer.Option(None, "--image", "-i", help="Path to the cover image.", exists=True, file_okay=True, dir_okay=False),
     seed: int = typer.Option(4589, "--seed", "-s", help="Seed for random pixel selection."),
     rle: bool = typer.Option(False, "--rle", help="Print only RLE result."),
-    rewrite: bool = typer.Option(True, "--rewrite", "-r", help="Rewrite input image"),
+    file_out: Path = typer.Option(None, "--file-out", "-fo", help="Output of the result"),
     no_qr: bool = typer.Option(False, "--no-qr", "-nq", help="Don't use QR Code"),
 ):
     """
     [bold green]Hide[/bold green] a message inside an image as a QR code.
     """
-    if message is None and file is not None:
+    data_from_user = "".encode()
+    if file:
         no_qr = True
         try:
             data_from_user = Path(file).read_bytes()
@@ -41,9 +42,11 @@ def hide(
             ))
             raise typer.Exit(code=1)
         data_from_user = zlib.compress(data_from_user)
-    else:
+
+    if message:
         data_from_user = message.encode()
-    # if message is None:
+            
+    # if message is None or file is None:
     #     console.print(Panel.fit(
     #         f"[bold red]Error:[/bold red] Either message or file must be provided.",
     #         title="Cool Steg - Hide"
@@ -55,15 +58,15 @@ def hide(
         TextColumn("[progress.description]{task.description}"),
         transient=True,
     ) as progress:
-        task = progress.add_task("Processing...", total=5)
-
-        if rewrite: output = cover
+        output = cover if not file_out else file_out
         if not rle and cover is None:
             console.print(Panel.fit(
                 f"[bold red]Error:[/bold red] Cover image is required.",
                 title="Cool Steg - Hide"
             ))
             raise typer.Exit(code=1)
+        
+        task = progress.add_task("Processing...", total=5)
 
         if not no_qr:
             progress.update(task, description="Generating QR code...")
@@ -126,7 +129,13 @@ def reveal(
     ) as progress:
         goes_smooth = True
         to_a_file = False
-        is_string = False
+        # is_string = False
+
+        # TODO: don't do this
+        extracted_data = ""
+        rle_string = ""
+        filepath = ""
+
         task = progress.add_task("Processing...", total=4)
 
         if rle:
@@ -170,6 +179,16 @@ def reveal(
                 console.print("[bold red]Error:[/bold red] Failed to decompress Show anyway...")
                 goes_smooth = False
 
+        if isinstance(extracted_data, bytes):
+            try: extracted_data = zlib.decompress(extracted_data)
+            except Exception as e: pass
+            try: extracted_data = extracted_data.decode()
+            except UnicodeDecodeError as e: console.print("[bold blue]Info:[/bold blue] File is not str")
+
+            if len(extracted_data) > 100:
+                console.print("[bold blue]Info:[/bold blue] Data is longer than 100 chars")
+                to_a_file = True
+
         if not no_qr:
             try:
                 qr_size = int(rle_string[-3:])
@@ -187,15 +206,6 @@ def reveal(
                 console.print("[bold red]Error:[/bold red] Failed to decode QR")
                 goes_smooth = False
                 
-        if isinstance(extracted_data, bytes):
-            try: extracted_data = zlib.decompress(extracted_data)
-            except Exception as e: pass
-            try: extracted_data = extracted_data.decode()
-            except UnicodeDecodeError as e: console.print("[bold blue]Info:[/bold blue] File is not str")
-
-            if len(extracted_data) > 100:
-                console.print("[bold blue]Info:[/bold blue] Data is longer than 100 chars")
-                to_a_file = True
 
         if show_rle:
             console.print(

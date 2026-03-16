@@ -1,18 +1,22 @@
 from PIL import Image
 import random
 import struct
+from typing import cast
 
 target_start_index = 0
 
 def chop_to_pieces(binary_string: str, piece_size: int):
     return [binary_string[i:i+piece_size] for i in range(0, len(binary_string), piece_size)]
 
-def get_img_from_path(image_path: str, mode: str = "RGB"):
-    img = Image.open(image_path).convert(mode)
+def get_img_from_path(image_path: str):
+    img = Image.open(image_path)
     return img
 
 def embed_data(img: Image.Image, data_bytes: bytes, seed: int, target_start_index: int = target_start_index, piece_size: int = 2) -> Image.Image:
     pixels = list(img.get_flattened_data())
+    pixels = cast(list[tuple[int, ...]], pixels)
+    # mode = img.mode
+    # print(pixels)
 
     # Header: data_len (32 bits)
     data_len = len(data_bytes) * 8
@@ -23,7 +27,11 @@ def embed_data(img: Image.Image, data_bytes: bytes, seed: int, target_start_inde
     pieces = chop_to_pieces(data_in_binary, piece_size)
     
     # Generate and shuffle indices
-    available_indices = list(range(target_start_index, len(pixels)))
+    available_indices = [
+        i for i in range(target_start_index, len(pixels))
+        if pixels[i][3] >= 255 // 2
+    ]
+    
     rng = random.Random(seed)
     rng.shuffle(available_indices)
     
@@ -54,12 +62,13 @@ def embed_data(img: Image.Image, data_bytes: bytes, seed: int, target_start_inde
     # Reconstruct all pixels
     new_pixels = [modified_pixels_map.get(i, pixels[i]) for i in range(len(pixels))]
             
-    new_img = Image.new("RGB", img.size)
+    new_img = Image.new(img.mode, img.size)
     new_img.putdata(new_pixels)
     return new_img
 
 def extract_data(img: Image.Image, seed: int, target_start_index: int = target_start_index, piece_size: int = 2) -> bytes:
     pixels = list(img.get_flattened_data())
+    pixels = cast(list[tuple[int, ...]], pixels)
     
     # Header is 32 bits for data_len
     header_bits_count = 32
