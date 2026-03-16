@@ -2,6 +2,7 @@
 The cool steganography tool i've made. This can hide any file and any message to an image and a system to spread the data in the whole image using a seed. And you can store multiple data inside the same image by just using a different seed (but watchout for collision).
 
 # usage
+if you're on linux install zbar based on your distro
 ## how to install
 1. `git clone https://github.com/razerpoa/cool_steg`
 2. cd cool_steg
