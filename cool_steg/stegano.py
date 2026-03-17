@@ -12,58 +12,68 @@ def get_img_from_path(image_path: str):
     img = Image.open(image_path)
     return img
 
-def embed_data(img: Image.Image, data_bytes: bytes, seed: int, target_start_index: int = target_start_index, piece_size: int = 2) -> Image.Image:
+def embed_data(img: Image.Image, data_bytes: bytes, seed: int, target_start_index: int = 0, piece_size: int = 2) -> Image.Image:
     pixels = list(img.get_flattened_data())
-    pixels = cast(list[tuple[int, ...]], pixels)
-    # mode = img.mode
-    # print(pixels)
-
-    # Header: data_len (32 bits)
-    data_len = len(data_bytes) * 8
-    header = struct.pack(">I", data_len)
+    
+    # 1. Prepare Data
+    # data_len in bits for the header
+    data_bits_total = len(data_bytes) * 8
+    header = struct.pack(">I", data_bits_total)
     
     full_data = header + data_bytes
     data_in_binary = "".join(format(byte, '08b') for byte in full_data)
-    pieces = chop_to_pieces(data_in_binary, piece_size)
+    pieces = [data_in_binary[i:i+piece_size] for i in range(0, len(data_in_binary), piece_size)]
     
-    # Generate and shuffle indices
-    available_indices = [
-        i for i in range(target_start_index, len(pixels))
-        if pixels[i][3] >= 255 // 2
-    ]
-    
+    # 2. Identify available pixels based on mode
+    if img.mode == "RGBA":
+        # Only use pixels that are mostly opaque (Alpha > 127)
+        available_indices = [
+            i for i in range(target_start_index, len(pixels))
+            if pixels[i][3] >= 128
+        ]
+    else:
+        available_indices = list(range(target_start_index, len(pixels)))
+
     rng = random.Random(seed)
     rng.shuffle(available_indices)
     
-    pixels_needed = (len(pieces) + 2) // 3
-    if pixels_needed > len(available_indices):
-        raise ValueError("Data too large for the image.")
+    # 3. Calculate capacity correctly
+    # Determine how many channels per pixel we actually have
+    sample_pixel = pixels[0]
+    channels_per_pixel = len(sample_pixel) if isinstance(sample_pixel, (tuple, list)) else 1
+    
+    needed_pixels = (len(pieces) + channels_per_pixel - 1) // channels_per_pixel
+    
+    if needed_pixels > len(available_indices):
+        raise ValueError(f"Data too large. Need {needed_pixels} pixels, but only {len(available_indices)} available.")
         
-    selected_indices = available_indices[:pixels_needed]
-    
-    modified_pixels_map = {}
+    # 4. Embed
     piece_idx = 0
-    
-    for idx in selected_indices:
+    for idx in available_indices:
         if piece_idx >= len(pieces):
             break
             
         pixel = pixels[idx]
-        new_channels = list(pixel)
-        for channel_idx in range(3):
+        # Convert to list so we can mutate
+        new_channels = list(pixel) if isinstance(pixel, (tuple, list)) else [pixel]
+
+        for c_idx in range(len(new_channels)):
             if piece_idx < len(pieces):
-                binary_channel = format(new_channels[channel_idx], '08b')
-                modified = binary_channel[:-piece_size] + pieces[piece_idx]
-                new_channels[channel_idx] = int(modified, 2)
+                # Bit manipulation: Clear LSBs and OR the piece
+                # Faster than string formatting:
+                val = new_channels[c_idx]
+                mask = (1 << piece_size) - 1
+                val = (val >> piece_size << piece_size) | int(pieces[piece_idx], 2)
+                
+                new_channels[c_idx] = val
                 piece_idx += 1
+
+        # Put back in the original list (save memory/time)
+        pixels[idx] = tuple(new_channels) if isinstance(pixel, (tuple, list)) else new_channels[0]
         
-        modified_pixels_map[idx] = tuple(new_channels)
-        
-    # Reconstruct all pixels
-    new_pixels = [modified_pixels_map.get(i, pixels[i]) for i in range(len(pixels))]
-            
+    # 5. Create new image
     new_img = Image.new(img.mode, img.size)
-    new_img.putdata(new_pixels)
+    new_img.putdata(pixels)
     return new_img
 
 def extract_data(img: Image.Image, seed: int, target_start_index: int = target_start_index, piece_size: int = 2) -> bytes:
@@ -84,6 +94,8 @@ def extract_data(img: Image.Image, seed: int, target_start_index: int = target_s
     while len(header_pieces) < header_piece_count:
         idx = next(idx_iter)
         pixel = pixels[idx]
+        pixel = pixel if not isinstance(pixel, int) else [pixel]
+
         for channel in pixel:
             if len(header_pieces) < header_piece_count:
                 binary_channel = format(channel, '08b')
@@ -106,6 +118,8 @@ def extract_data(img: Image.Image, seed: int, target_start_index: int = target_s
         if len(pieces) >= total_piece_count:
             break
         pixel = pixels[idx]
+        pixel = pixel if not isinstance(pixel, int) else [pixel]
+
         for channel in pixel:
             if len(pieces) < total_piece_count:
                 binary_channel = format(channel, '08b')

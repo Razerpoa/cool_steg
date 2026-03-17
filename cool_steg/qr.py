@@ -27,11 +27,13 @@ def decode_qr_from_pixels(pixels: list[int], size: tuple[int, int], scale_factor
     img_array = np.array(pixels, dtype=np.uint8).reshape((size[1], size[0]))
     img = Image.fromarray(img_array, mode='L')
 
+    # img.show()
     new_size = (img.width * scale_factor, img.height * scale_factor)
     img_upscaled = img.resize(new_size, Image.Resampling.NEAREST)
     img_upscaled = img_upscaled.convert("RGB")
 
     data = pyzbar.decode(img_upscaled)[0]
+    # print(data)
     if data.type != "QRCODE":
         raise Exception("Not QR!")
     result = data.data.decode()

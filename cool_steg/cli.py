@@ -7,7 +7,7 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from pathlib import Path
 from .qr import generate_qr_pixels, decode_qr_from_pixels
-from .rle import encode_rle, decode_rle, step_2_compression, step_2_decompression
+from .rle import encode_rle, decode_rle, step_2_compression, step_2_decompression, convert_bytes_to_rle_suitable, convert_rle_suitable_to_bytes
 from .stegano import embed_data, extract_data, get_img_from_path
 
 app = typer.Typer(
@@ -45,19 +45,13 @@ def hide(
 
     if message:
         data_from_user = message.encode()
-            
-    # if message is None or file is None:
-    #     console.print(Panel.fit(
-    #         f"[bold red]Error:[/bold red] Either message or file must be provided.",
-    #         title="Cool Steg - Hide"
-    #     ))
-    #     raise typer.Exit(code=1)
 
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         transient=True,
     ) as progress:
+        pixels = None
         output = cover if not file_out else file_out
         if not rle and cover is None:
             console.print(Panel.fit(
@@ -72,16 +66,19 @@ def hide(
             progress.update(task, description="Generating QR code...")
             pixels, size = generate_qr_pixels(data_from_user)
 
-            progress.update(task, advance=1, description="Compressing pixels (Step 1 RLE)...")
-            data_from_user = encode_rle(pixels)
-            
+        progress.update(task, advance=1, description="Compressing pixels (Step 1 RLE)...")
+        # print(hashlib.sha1(data_from_user).hexdigest())
+        # print(convert_bytes_to_rle_suitable(data_from_user))
+        data_from_user = encode_rle([1 if bit == 255 else 0 for bit in pixels] if pixels else convert_bytes_to_rle_suitable(data_from_user))
+        
+        if not no_qr:
             progress.update(task, advance=1, description="Appending size to RLE data...")
             if len(str(size[0])) < 3:
                 data_from_user += "0"
             data_from_user += str(size[0])
 
-            progress.update(task, advance=1, description="Compressing pixels (Step 2 RLE)...")
-            data_from_user = step_2_compression(data_from_user).encode()
+        progress.update(task, advance=1, description="Compressing pixels (Step 2 RLE)...")
+        data_from_user = step_2_compression(data_from_user).encode()
         
         if rle:
             progress.stop()
@@ -95,6 +92,11 @@ def hide(
         progress.update(task, advance=1, description="Embedding data into image...")
         try:
             img = get_img_from_path(str(cover))
+            # img = img.convert("L")
+            # print(img.mode)
+            if img.mode != "RGB" and img.mode != "RGBA":
+                console.print(f"[bold blue]Info:[/bold blue] Image is {img.mode}")
+                img = img.convert("RGB")
             img = embed_data(img, data_from_user, seed)
             img.save(output)
         except Exception as e:
@@ -118,6 +120,7 @@ def reveal(
     rle: str = typer.Option(None, "--rle", help="Provide RLE data directly instead of from an image."),
     show_rle: bool = typer.Option(False, "--show-rle", help="Show decompressed RLE string and exit."),
     no_qr: bool = typer.Option(False, "--no-qr", "-nq", help="Don't decode to qr"),
+    write_anyway: bool = typer.Option(False, "--write-anyway", help="Write anyway despite data is gibberish")
 ):
     """
     [bold magenta]Reveal[/bold magenta] a hidden message from an image.
@@ -170,15 +173,6 @@ def reveal(
             ))
             raise typer.Exit(code=1)
         
-        # 2. Decompress Step 2 then Step 1
-        progress.update(task, description="Decompressing pixels (Step 2 RLE)...")
-        if isinstance(extracted_data, str):
-            try:
-                rle_string = step_2_decompression(extracted_data)
-            except Exception as e:
-                console.print("[bold red]Error:[/bold red] Failed to decompress Show anyway...")
-                goes_smooth = False
-
         if isinstance(extracted_data, bytes):
             try: extracted_data = zlib.decompress(extracted_data)
             except Exception as e: pass
@@ -189,6 +183,14 @@ def reveal(
                 console.print("[bold blue]Info:[/bold blue] Data is longer than 100 chars")
                 to_a_file = True
 
+        progress.update(task, description="Decompressing (Step 2 RLE)...")
+        if isinstance(extracted_data, str):
+            try:
+                rle_string = step_2_decompression(extracted_data)
+            except Exception as e:
+                console.print("[bold red]Error:[/bold red] Failed to decompress Show anyway...")
+                goes_smooth = False
+
         if not no_qr:
             try:
                 qr_size = int(rle_string[-3:])
@@ -197,15 +199,29 @@ def reveal(
 
                 progress.update(task, advance=1, description="Decompressing pixels (Step 1 RLE)...")
                 pixels = decode_rle(rle_string)
-            
+                pixels = [255 if pixel == 1 else 0 for pixel in pixels]
+
                 progress.update(task, advance=1, description="Decoding QR Code...")
                 extracted_data = decode_qr_from_pixels(pixels, qr_size)
             except ValueError as e:
                 pass
             except Exception as e:
-                console.print("[bold red]Error:[/bold red] Failed to decode QR")
+                console.print(f"[bold red]Error:[/bold red] Failed to decode QR: {e}")
                 goes_smooth = False
                 
+        if isinstance(extracted_data, str):
+            try:
+                progress.update(task, advance=1, description="Decompressing (Step 1 RLE)...")
+                rle_string = step_2_decompression(extracted_data)
+                # print(extracted_data)
+                bit_list = decode_rle(rle_string)
+                # pixels = [255 if pixel == 1 else 0 for pixel in pixels]
+                byte_data = convert_rle_suitable_to_bytes(bit_list)
+                extracted_data = zlib.decompress(byte_data)
+            except zlib.error as e:
+                # console.print(f"[bold red]Info:[/bold red] Failed to decompress: {e}")
+                # goes_smooth = False
+                pass
 
         if show_rle:
             console.print(
@@ -216,19 +232,23 @@ def reveal(
             raise typer.Exit()
         if to_a_file:
             filepath = str(file)
-            if isinstance(extracted_data, str):
-                filepath += ".txt"
-                console.print(f"[bold blue]Info:[/bold blue] Saving to {filepath}...")
-                open(filepath, "w").write(extracted_data)
+            m = magic.Magic(mime=True)
+            mime = m.from_buffer(extracted_data)
+            extension = mimetypes.guess_extension(mime)
+
+            if mime and extension and mime != "application/octet-stream":
+                console.print(f"[bold blue]Info:[/bold blue] File mime seems to be [white]{mime} with extension: {extension}[/white]")
+                filepath += extension
+
             else:
-                m = magic.Magic(mime=True)
-                mime = m.from_buffer(extracted_data)
-                extension = mimetypes.guess_extension(mime)
-                if mime and extension:
-                    console.print(f"[bold blue]Info:[/bold blue] File mime seems to be [white]{mime}[/white]")
-                    filepath += extension
-                console.print(f"[bold blue]Info:[/bold blue] Saving to {filepath}...")
-                open(filepath, "wb").write(extracted_data)
+                console.print("[bold blue]Info:[/bold blue] Extracted data is gibberish...")
+                if not write_anyway:
+                    raise typer.Exit()
+
+            console.print(f"[bold blue]Info:[/bold blue] Saving to {filepath}...")
+
+            extracted_data = extracted_data.encode() if isinstance(extracted_data, str) else extracted_data
+            open(filepath, "wb").write(extracted_data)
 
         # 3. Save as QR code image
         # progress.add_task(description="Saving revealed QR code...", total=None)

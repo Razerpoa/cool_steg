@@ -22,7 +22,7 @@ def decode_rle(encoded_data: str) -> list[int]:
     
     result = []
     for idx, count in enumerate(runs):
-        color = 0 if idx % 2 == 0 else 255
+        color = 0 if idx % 2 == 0 else 1
         result.extend([color] * count)
     return result
 
@@ -87,3 +87,11 @@ def step_2_decompression(encoded_data: str) -> str:
             
         result.append(char * count)
     return "".join(result)
+
+def convert_bytes_to_rle_suitable(data: bytes) -> list[int]:
+    bits = [int(bit) for byte in data for bit in f'{byte:08b}']
+    return bits
+
+def convert_rle_suitable_to_bytes(data: list[int]) -> bytes:
+    return bytes([int("".join(map(str, data[i:i+8])), 2) 
+                  for i in range(0, len(data), 8)])
